@@ -1,1 +1,1 @@
-"# Hackit-25" 
+This is the local version of README.md.
