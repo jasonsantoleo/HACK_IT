@@ -1,16 +1,58 @@
+# Set environment variable for Streamlit watcher backend before any imports
+import os
+os.environ["STREAMLIT_WATCHER_BACKEND"] = "watchdog"
+
+# Import streamlit first
 import streamlit as st
-from pix2tex.cli import LatexOCR
-from PIL import Image
-import google.generativeai as genai
+
+# Then import other dependencies
 import io
 import time
+import sys
+import traceback
 
-# Page Configuration
+# Import PIL before PyTorch-related imports
+from PIL import Image
+
+# Add version debugging
 st.set_page_config(
-    page_title="Math Equation Solver",
+    page_title="Math Equation Solver with Animations",
     page_icon="📝",
     layout="wide"
 )
+
+# Debug versions section
+with st.expander("Debug Information"):
+    st.write(f"Python version: {sys.version}")
+    st.write(f"PIL version: {Image.__version__}")
+    
+    # Try importing each dependency with error handling
+    try:
+        from pix2tex.cli import LatexOCR
+        st.write("✅ pix2tex successfully imported")
+    except Exception as e:
+        st.error(f"❌ Error importing pix2tex: {str(e)}")
+        
+    try:
+        import google.generativeai as genai
+        st.write("✅ google.generativeai successfully imported")
+    except Exception as e:
+        st.error(f"❌ Error importing google.generativeai: {str(e)}")
+        
+    try:
+        import helpers.manim_animator
+        st.write("✅ helpers.manim_animator successfully imported")
+    except Exception as e:
+        st.error(f"❌ Error importing helpers.manim_animator: {str(e)}")
+
+# Now import the dependencies for actual use
+try:
+    from pix2tex.cli import LatexOCR
+    import google.generativeai as genai
+    import helpers.manim_animator
+except Exception as e:
+    st.error(f"Failed to import required dependencies: {str(e)}")
+    st.stop()
 
 # Initialize session state variables
 if "latex_model" not in st.session_state:
@@ -19,25 +61,68 @@ if "latex_code" not in st.session_state:
     st.session_state.latex_code = ""
 if "history" not in st.session_state:
     st.session_state.history = []
+if "explanation_text" not in st.session_state:
+    st.session_state.explanation_text = ""
+if "animation_path" not in st.session_state:
+    st.session_state.animation_path = None
+if "debug_mode" not in st.session_state:
+    st.session_state.debug_mode = False
 
 # Function to initialize the LatexOCR model
 def load_latex_model():
     try:
         with st.spinner("Loading OCR model (this may take a moment)..."):
             st.session_state.latex_model = LatexOCR()
+            if st.session_state.debug_mode:
+                st.write(f"DEBUG: LaTeX model type: {type(st.session_state.latex_model)}")
         return True
     except Exception as e:
         st.error(f"Failed to load LaTeX OCR model: {str(e)}")
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Full traceback: {traceback.format_exc()}")
         return False
 
 # Function to configure Gemini API
 def configure_gemini_api(api_key):
     try:
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Gemini model configured successfully")
+        return model
     except Exception as e:
         st.error(f"Failed to configure Gemini API: {str(e)}")
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Full traceback: {traceback.format_exc()}")
         return None
+
+def sanitize_latex(latex_code):
+    if not latex_code:
+        return ""
+    
+    # Remove excessive spacing commands
+    latex_code = latex_code.replace('\\!', '')
+    
+    # Limit the length to prevent rendering issues
+    if len(latex_code) > 500:
+        latex_code = latex_code[:500] + "..."
+    
+    # Replace non-standard commands
+    latex_code = latex_code.replace('\\given', '\\text{given}')
+    
+    # Ensure balanced brackets
+    open_brackets = latex_code.count('\\left')
+    close_brackets = latex_code.count('\\right')
+    if open_brackets > close_brackets:
+        for _ in range(open_brackets - close_brackets):
+            latex_code += '\\right.'
+    
+    # Ensure proper environment closure for common environments
+    for env in ['equation', 'align', 'matrix', 'bmatrix', 'cases']:
+        if f"\\begin{{{env}}}" in latex_code and f"\\end{{{env}}}" not in latex_code:
+            latex_code += f"\\end{{{env}}}"
+    
+    return latex_code
 
 # Function to process image and extract LaTeX
 def process_image(image):
@@ -48,25 +133,48 @@ def process_image(image):
         
         # Extract LaTeX from image
         latex_code = st.session_state.latex_model(image)
+        
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Raw LaTeX: {latex_code}")
+            st.write(f"DEBUG: LaTeX type: {type(latex_code)}")
+        
+        # Sanitize LaTeX code
+        latex_code = sanitize_latex(latex_code)
+        
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Sanitized LaTeX: {latex_code}")
+        
         st.session_state.latex_code = latex_code
         return latex_code
     except Exception as e:
         st.error(f"Error processing image: {str(e)}")
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Full traceback: {traceback.format_exc()}")
         return None
 
 # Function to get response from Gemini
 def get_gemini_response(prompt, gemini_model):
     try:
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Sending prompt to Gemini: {prompt[:100]}...")
+        
         response = gemini_model.generate_content(prompt)
         return response.text
     except Exception as e:
         st.error(f"Error getting response from Gemini: {str(e)}")
+        if st.session_state.debug_mode:
+            st.write(f"DEBUG: Full traceback: {traceback.format_exc()}")
         return None
 
 # Main application
 def main():
     # Title and description
-    st.title("📝 Math Equation Solver & Assistant")
+    st.title("📝 Math Equation Solver with Animations")
+    st.markdown("""
+    This app uses OCR to extract mathematical equations from images, 
+    solves them using Gemini AI, and creates step-by-step animations 
+    to visualize the solution process.
+    """)
     
     # Sidebar for API configuration
     with st.sidebar:
@@ -87,11 +195,21 @@ def main():
         3. Upload an image with a math equation
         4. Review the extracted LaTeX
         5. Get solutions and explanations
-        6. Ask follow-up questions
+        6. Generate visual animations
+        7. Ask follow-up questions
         """)
+        
+        # Animation settings
+        st.divider()
+        st.header("Animation Settings")
+        st.radio("Animation Quality", ["Low", "Medium", "High"], index=1, key="animation_quality")
+        
+        # Debug mode toggle
+        st.divider()
+        st.checkbox("Enable Debug Mode", key="debug_mode")
 
     # Create two columns for the main content
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([1, 1.2])
     
     with col1:
         st.subheader("Upload Equation Image")
@@ -112,6 +230,8 @@ def main():
                         if latex_code:
                             st.success("Equation extracted successfully!")
                             st.session_state.history = []  # Reset history with new equation
+                            st.session_state.animation_path = None  # Reset animation path
+                            st.session_state.explanation_text = ""  # Reset explanation
                         else:
                             st.error("Could not extract equation. Please try a clearer image.")
     
@@ -120,8 +240,18 @@ def main():
             st.subheader("Extracted LaTeX")
             st.code(st.session_state.latex_code, language="latex")
             
+            # Try rendering LaTeX with error handling
+            try:
+                st.latex(st.session_state.latex_code)
+                if st.session_state.debug_mode:
+                    st.success("LaTeX rendered successfully")
+            except Exception as e:
+                st.error(f"Error rendering LaTeX: {str(e)}")
+                if st.session_state.debug_mode:
+                    st.write(f"DEBUG - LaTeX rendering error: {traceback.format_exc()}")
+            
             # Create tabs for different views
-            tab1, tab2, tab3 = st.tabs(["Solution", "Step-by-Step", "Ask Questions"])
+            tab1, tab2, tab3, tab4 = st.tabs(["Quick Solution", "Step-by-Step", "Animation", "Ask Questions"])
             
             gemini_model = configure_gemini_api(api_key)
             if not gemini_model:
@@ -140,46 +270,269 @@ def main():
             with tab2:
                 if st.button("Get Explanation", key="explanation_button"):
                     with st.spinner("Generating explanation..."):
-                        explanation_prompt = f"Explain step by step how to solve this equation: {st.session_state.latex_code}"
+                        explanation_prompt = f"""
+                        Explain step by step how to solve this equation: {st.session_state.latex_code}
+                        
+                        Format each step as a clear equation on its own line.
+                        After each equation step, briefly explain the operation performed.
+                        Make sure each step follows logically from the previous one.
+                        """
                         explanation = get_gemini_response(explanation_prompt, gemini_model)
                         if explanation:
+                            st.session_state.explanation_text = explanation
                             st.markdown("### Step-by-Step Explanation")
                             st.markdown(explanation)
             
             with tab3:
+                st.markdown("### Animation")
+                
+                if st.session_state.explanation_text:
+                    if st.button("Generate Animation", key="animation_button"):
+                        with st.spinner("Generating animation (this may take a while)..."):
+                            # Get animation quality setting
+                            quality = st.session_state.animation_quality.lower()
+                            
+                            # Generate animation
+                            try:
+                                animation_path = helpers.manim_animator.create_solution_animation(
+                                    st.session_state.latex_code,
+                                    st.session_state.explanation_text,
+                                    quality=quality
+                                )
+                                
+                                if animation_path:
+                                    st.session_state.animation_path = animation_path
+                                    st.success("Animation generated successfully!")
+                                else:
+                                    st.error("Failed to generate animation.")
+                            except Exception as e:
+                                st.error(f"Error during animation generation: {str(e)}")
+                                if st.session_state.debug_mode:
+                                    st.write(f"DEBUG - Animation error: {traceback.format_exc()}")
+                
+                # Display animation if available
+                if st.session_state.animation_path and os.path.exists(st.session_state.animation_path):
+                    st.video(st.session_state.animation_path)
+                elif st.session_state.animation_path:
+                    st.error("Animation file not found. It may have been deleted or moved.")
+            
+            with tab4:
                 st.markdown("### Ask Follow-up Questions")
-                user_question = st.text_input("Type your question about this equation:")
+                user_question = st.text_input("Ask a question about this equation or solution:")
                 
-                if user_question:
-                    if st.button("Submit Question"):
-                        with st.spinner("Generating answer..."):
-                            # Add question to history
-                            st.session_state.history.append({"role": "user", "content": user_question})
-                            
-                            # Generate contextualized prompt
-                            context_prompt = f"""
-                            Answer the user's question related to this equation: {st.session_state.latex_code}
-                            User's question: {user_question}
-                            Provide a clear, educational response with examples if necessary.
-                            """
-                            
-                            response = get_gemini_response(context_prompt, gemini_model)
-                            if response:
-                                st.session_state.history.append({"role": "assistant", "content": response})
+                if user_question and st.button("Ask", key="ask_button"):
+                    with st.spinner("Getting answer..."):
+                        context = f"""
+                        Equation: {st.session_state.latex_code}
+                        
+                        Previous explanation:
+                        {st.session_state.explanation_text}
+                        
+                        Question: {user_question}
+                        """
+                        
+                        answer = get_gemini_response(context, gemini_model)
+                        if answer:
+                            # Add to history
+                            st.session_state.history.append({
+                                "question": user_question,
+                                "answer": answer
+                            })
                 
-                # Display conversation history
-                st.divider()
-                st.markdown("### Conversation History")
-                for message in st.session_state.history:
-                    if message["role"] == "user":
-                        st.markdown(f"**You:** {message['content']}")
-                    else:
-                        st.markdown(f"**Assistant:** {message['content']}")
-                        st.divider()
+                # Show conversation history
+                if st.session_state.history:
+                    st.markdown("### Conversation History")
+                    for i, item in enumerate(st.session_state.history):
+                        st.markdown(f"**Q: {item['question']}**")
+                        st.markdown(f"A: {item['answer']}")
+                        if i < len(st.session_state.history) - 1:
+                            st.divider()
 
 # Run the application
 if __name__ == "__main__":
     main()
+# from pix2tex.cli import LatexOCR
+# from PIL import Image
+# import google.generativeai as genai
+# import io
+# import time
+# import streamlit as st
+
+# # Page Configuration
+# st.set_page_config(
+#     page_title="Math Equation Solver",
+#     page_icon="📝",
+#     layout="wide"
+# )
+
+# # Initialize session state variables
+# if "latex_model" not in st.session_state:
+#     st.session_state.latex_model = None
+# if "latex_code" not in st.session_state:
+#     st.session_state.latex_code = ""
+# if "history" not in st.session_state:
+#     st.session_state.history = []
+
+# # Function to initialize the LatexOCR model
+# def load_latex_model():
+#     try:
+#         with st.spinner("Loading OCR model (this may take a moment)..."):
+#             st.session_state.latex_model = LatexOCR()
+#         return True
+#     except Exception as e:
+#         st.error(f"Failed to load LaTeX OCR model: {str(e)}")
+#         return False
+
+# # Function to configure Gemini API
+# def configure_gemini_api(api_key):
+#     try:
+#         genai.configure(api_key=api_key)
+#         return genai.GenerativeModel("gemini-1.5-flash")
+#     except Exception as e:
+#         st.error(f"Failed to configure Gemini API: {str(e)}")
+#         return None
+
+# # Function to process image and extract LaTeX
+# def process_image(image):
+#     try:
+#         if st.session_state.latex_model is None:
+#             if not load_latex_model():
+#                 return None
+        
+#         # Extract LaTeX from image
+#         latex_code = st.session_state.latex_model(image)
+#         st.session_state.latex_code = latex_code
+#         return latex_code
+#     except Exception as e:
+#         st.error(f"Error processing image: {str(e)}")
+#         return None
+
+# # Function to get response from Gemini
+# def get_gemini_response(prompt, gemini_model):
+#     try:
+#         response = gemini_model.generate_content(prompt)
+#         return response.text
+#     except Exception as e:
+#         st.error(f"Error getting response from Gemini: {str(e)}")
+#         return None
+
+# # Main application
+# def main():
+#     # Title and description
+#     st.title("📝 Math Equation Solver & Assistant")
+    
+#     # Sidebar for API configuration
+#     with st.sidebar:
+#         st.header("Configuration")
+#         api_key = st.text_input("Gemini API Key", value="AIzaSyB5K90gSeNAxULBv1xp4xhy6PK0bXiMgeI", type="password")
+#         st.caption("Your API key is securely stored in this session only.")
+        
+#         if st.button("Initialize Models"):
+#             gemini_model = configure_gemini_api(api_key)
+#             if gemini_model and load_latex_model():
+#                 st.success("✅ Models loaded successfully!")
+        
+#         st.divider()
+#         st.markdown("### How to use")
+#         st.markdown("""
+#         1. Enter your Gemini API key
+#         2. Initialize the models
+#         3. Upload an image with a math equation
+#         4. Review the extracted LaTeX
+#         5. Get solutions and explanations
+#         6. Ask follow-up questions
+#         """)
+
+#     # Create two columns for the main content
+#     col1, col2 = st.columns([1, 1])
+    
+#     with col1:
+#         st.subheader("Upload Equation Image")
+#         uploaded_file = st.file_uploader("Select image file (JPG, PNG, JPEG)", type=["jpg", "png", "jpeg"])
+        
+#         if uploaded_file:
+#             # Display the uploaded image
+#             image = Image.open(uploaded_file)
+#             st.image(image, caption="Uploaded Image", use_column_width=True)
+            
+#             # Process button
+#             if st.button("Process Equation"):
+#                 with st.spinner("Processing image..."):
+#                     gemini_model = configure_gemini_api(api_key)
+#                     if gemini_model:
+#                         latex_code = process_image(image)
+                        
+#                         if latex_code:
+#                             st.success("Equation extracted successfully!")
+#                             st.session_state.history = []  # Reset history with new equation
+#                         else:
+#                             st.error("Could not extract equation. Please try a clearer image.")
+    
+#     with col2:
+#         if st.session_state.latex_code:
+#             st.subheader("Extracted LaTeX")
+#             st.code(st.session_state.latex_code, language="latex")
+            
+#             # Create tabs for different views
+#             tab1, tab2, tab3 = st.tabs(["Solution", "Step-by-Step", "Ask Questions"])
+            
+#             gemini_model = configure_gemini_api(api_key)
+#             if not gemini_model:
+#                 st.error("Please initialize the models first")
+#                 return
+            
+#             with tab1:
+#                 if st.button("Get Solution", key="solution_button"):
+#                     with st.spinner("Solving..."):
+#                         solution_prompt = f"Solve this equation and provide the final numerical or algebraic answer: {st.session_state.latex_code}"
+#                         solution = get_gemini_response(solution_prompt, gemini_model)
+#                         if solution:
+#                             st.markdown("### Solution")
+#                             st.markdown(solution)
+            
+#             with tab2:
+#                 if st.button("Get Explanation", key="explanation_button"):
+#                     with st.spinner("Generating explanation..."):
+#                         explanation_prompt = f"Explain step by step how to solve this equation: {st.session_state.latex_code}"
+#                         explanation = get_gemini_response(explanation_prompt, gemini_model)
+#                         if explanation:
+#                             st.markdown("### Step-by-Step Explanation")
+#                             st.markdown(explanation)
+            
+#             with tab3:
+#                 st.markdown("### Ask Follow-up Questions")
+#                 user_question = st.text_input("Type your question about this equation:")
+                
+#                 if user_question:
+#                     if st.button("Submit Question"):
+#                         with st.spinner("Generating answer..."):
+#                             # Add question to history
+#                             st.session_state.history.append({"role": "user", "content": user_question})
+                            
+#                             # Generate contextualized prompt
+#                             context_prompt = f"""
+#                             Answer the user's question related to this equation: {st.session_state.latex_code}
+#                             User's question: {user_question}
+#                             Provide a clear, educational response with examples if necessary.
+#                             """
+                            
+#                             response = get_gemini_response(context_prompt, gemini_model)
+#                             if response:
+#                                 st.session_state.history.append({"role": "assistant", "content": response})
+                
+#                 # Display conversation history
+#                 st.divider()
+#                 st.markdown("### Conversation History")
+#                 for message in st.session_state.history:
+#                     if message["role"] == "user":
+#                         st.markdown(f"**You:** {message['content']}")
+#                     else:
+#                         st.markdown(f"**Assistant:** {message['content']}")
+#                         st.divider()
+
+# # Run the application
+# if __name__ == "__main__":
+#     main()
 # import streamlit as st
 # import os
 # import numpy as np
