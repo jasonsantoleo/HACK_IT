@@ -179,7 +179,7 @@ def main():
     # Sidebar for API configuration
     with st.sidebar:
         st.header("Configuration")
-        api_key = st.text_input("Gemini API Key", value="AIzaSyB5K90gSeNAxULBv1xp4xhy6PK0bXiMgeI", type="password")
+        api_key = st.text_input("Gemini API Key", value="Google api key", type="password")
         st.caption("Your API key is securely stored in this session only.")
         
         if st.button("Initialize Models"):
@@ -424,7 +424,7 @@ if __name__ == "__main__":
 #     # Sidebar for API configuration
 #     with st.sidebar:
 #         st.header("Configuration")
-#         api_key = st.text_input("Gemini API Key", value="AIzaSyB5K90gSeNAxULBv1xp4xhy6PK0bXiMgeI", type="password")
+#         api_key = st.text_input("Gemini API Key", value="GOogle api key ", type="password")
 #         st.caption("Your API key is securely stored in this session only.")
         
 #         if st.button("Initialize Models"):
